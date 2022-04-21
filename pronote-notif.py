@@ -6,20 +6,13 @@ import os
 import datetime
 import pickle
 import logging
-import configparser
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+import requests
 
 import pronotepy
-from pronotepy.ent import *
 
 LOG_FICHIER = "pronote-notif.log"
 LOG_FORMAT = '%(asctime)s  %(levelname)s %(message)s'
-CONF_FICHIER = "pronote-notif.conf"
 DB_FICHIER = "db-pronote-notif.pickle"
-DOSSIER = os.path.realpath(__file__)[:-16]
-os.chdir(DOSSIER)
 
 
 def notif_notes():
@@ -48,15 +41,14 @@ def notif_notes():
             enregistre_donnees_fichier(dict_database)
             notes_contenu_mail = ""
             for note in nouvelles_notes:
-                notes_contenu_mail = (f" * {note.grade}/{note.out_of} - {note.subject.name}"
-                                      f"\nle {str(note.date)}"
-                                      f"\ncoeff: {note.coefficient} "
-                                      f"\nmoyenne classe: {note.average}"
-                                      f"\nnote max: {note.max}"
-                                      f"\n note min: {note.min}\n\n")
-            envoi_mail("Nouvelle note - Notification Pronote",
-                       "Notification Pronote - Bot pronote-notif\n\n"
-                       f"### Nouvelle note:\n{notes_contenu_mail}")
+                notes_contenu_mail = (f"{note.subject.name}"
+                                      f"\nLe {str(note.date)}"
+                                      f"\nCoeff: {note.coefficient} "
+                                      f"\nMoyenne de la classe: {note.average}"
+                                      f"\nNote max: {note.max}"
+                                      f"\nNote min: {note.min}\n\n")
+            envoi_mail("[PRONOTEBridge] Nouvelle note",
+                       f"\n{notes_contenu_mail}")
 
 
 def notif_annulation_cours():
@@ -64,8 +56,8 @@ def notif_annulation_cours():
 
     cours_contenu_mail = ""
     logging.info("notif_annulation_cours - Compilation des cours annulés des "
-                 f"{config['Pronote']['ANALYSE_NB_JOURS']} prochains jours.")
-    for jour in range(int(config["Pronote"]["ANALYSE_NB_JOURS"])):
+                 f"14 prochains jours.")
+    for jour in range(14):
         # Récupère l'emploi du temps quotidien d'aujourd'hui jusqu'à
         # aujourd'hui + config["Pronote"]["ANALYSE_NB_JOURS"].
         date = datetime.date.today() + datetime.timedelta(days=jour)
@@ -74,15 +66,14 @@ def notif_annulation_cours():
             if cour.canceled:  # Si le cours est annulé.
                 if str(cour.start) not in dict_database["cours_annules"]:
                     # Si le cours n'est pas deja présent dans la liste des cours annulés.
-                    cours_contenu_mail += (f" {cour.start.strftime('%d//%m/%Y')} "
+                    cours_contenu_mail += (f"{cour.start.strftime('%d/%m/%Y')} "
                                            f"{cour.start.strftime('%H')}h-{cour.end.strftime('%H')}"
                                            f"h: {cour.subject.name}\n")
                     dict_database["cours_annules"].append(str(cour.start))
     if cours_contenu_mail != "":  # S'il y a des nouveaux cours annulés.
         enregistre_donnees_fichier(dict_database)
-        envoi_mail("Annulation de cours - Notification Pronote",
-                   "Notification Pronote - Bot pronote-notif\n\n"
-                   f"### Cours annulé:\n{cours_contenu_mail}")
+        envoi_mail("[PRONOTEBridge] Annulation de cours",
+                   f"\n{cours_contenu_mail}")
 
 
 def notif_informations():
@@ -108,8 +99,7 @@ def notif_informations():
                     nouvelles_infos.append(info)  # L'information est nouvelle.
                     dict_database["informations"].append(info.title)
                     nouvelles_infos.append(info)
-                    if config["Pronote"]["MARQUER_COMME_LUE"]:
-                        info.mark_as_read(True)
+
         if nouvelles_infos:  # Si la liste des nouvelles informations n'est pas vide.
             enregistre_donnees_fichier(dict_database)
             infos_contenu_mail = ""
@@ -120,9 +110,8 @@ def notif_informations():
                 else:
                     infos_contenu_mail += (f"{str(info.start_date)[:-9]} - {info.author}"
                                            f"- {info.title} :\n\n{info.content}\n\n")
-            envoi_mail("Nouvelle information - Notification Pronote",
-                       "Notification Pronote - Bot pronote-notif\n\n"
-                       f"### Nouvelle information:\n{infos_contenu_mail}")
+            envoi_mail("[PRONOTEBridge] Nouvelle information",
+                       f"\n{infos_contenu_mail}")
 
 
 def envoi_mail(objet, contenu):
@@ -131,21 +120,10 @@ def envoi_mail(objet, contenu):
     global mail_envoye
 
     try:
-        msg = MIMEMultipart()
-        msg['From'] = config["Email"]["MAIL_ENVOYEUR"]
-        msg['To'] = config["Email"]["MAIL_DESTINATAIRE"]
-        msg['Subject'] = objet
-        msg.attach(MIMEText(contenu))
-        mailserver = smtplib.SMTP(config["Email"]["MAIL_ADRESSE"], config["Email"]["MAIL_PORT"])
-        mailserver.ehlo()
-        mailserver.starttls()
-        mailserver.ehlo()
-        mailserver.login(config["Email"]["MAIL_LOGIN"], config["Email"]["MAIL_MOT_DE_PASSE"])
-        mailserver.sendmail(config["Email"]["MAIL_ENVOYEUR"],
-                            config["Email"]["MAIL_DESTINATAIRE"], msg.as_string())
-        mailserver.quit()
+        r = requests.post(open("credits").readlines()[3].split("\n")[0], {"username": objet, "content": contenu})
         logging.info(f"Mail envoyé: {objet}")
         mail_envoye = True
+        r.raise_for_status()
     except Exception as err:
         logging.critical(f"Une erreur est survenue lors de l'envoi d'un mail: {err}")
         raise SystemExit(f"Erreur: une erreur est survenue lors de l'envoi d'un mail: {err}")
@@ -168,12 +146,7 @@ if __name__ == '__main__':
                         handlers=[logging.FileHandler(LOG_FICHIER), logging.StreamHandler()])
     # Chargement du fichier de configuration.
     logging.info("------ Lancement du script ------")
-    try:
-        config = configparser.ConfigParser()
-        config.read(CONF_FICHIER)
-    except Exception as e:
-        logging.critical(f"Impossible de charger le fichier de configuration {CONF_FICHIER}")
-        raise SystemExit(f"Erreur: impossible de charger le fichier de configuration {CONF_FICHIER}")
+
     # Chargement du dictionnaire des données sauvegardées.
     if not os.path.isfile(DB_FICHIER):
         # Création du fichier de sauvegarde des données s'il n'existe pas.
@@ -185,13 +158,12 @@ if __name__ == '__main__':
         with open(DB_FICHIER, "rb") as file:
             dict_database = pickle.load(file)
         # Décommentez la ligne suivante pour afficher le dictionnaire chargé dans les logs.
-        #logging.info(f"Dictionnaire chargé: {dict_database}")
+        # logging.info(f"Dictionnaire chargé: {dict_database}")
     # Connexion à Pronote. Création de l'objet Client.
     try:
-        client = pronotepy.Client(config["Pronote"]["PRONOTE_ADRESSE"],
-                                  username=config["Pronote"]["PRONOTE_UTILISATEUR"],
-                                  password=config["Pronote"]["PRONOTE_MOT_DE_PASSE"],
-                                  ent=globals()[config["Pronote"]["DEFAUT_ENT"]])
+        client = pronotepy.Client(open("credits").readlines()[0].split("\n")[0],
+                                  open("credits").readlines()[1].split("\n")[0],
+                                  open("credits").readlines()[2].split("\n")[0])
     except Exception as e:
         logging.critical("Impossible de se connecter au compte Pronote. "
                          "Vérifiez le fichier de configuration.")
